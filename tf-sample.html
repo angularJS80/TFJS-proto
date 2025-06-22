@@ -1,18 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>웹캠 이미지 캡처 버퍼 테스트</title>
-    <style>
-        video, canvas {
-            border: 1px solid #ccc;
-            width: 320px;
-            height: 240px;
-            display: block;
-            margin-bottom: 10px;
-        }
-    </style>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>웹캠 이미지 캡처 버퍼 테스트</title>
+  <style>
+    video, canvas {
+      border: 1px solid #ccc;
+      width: 320px;
+      height: 240px;
+      display: block;
+      margin-bottom: 10px;
+    }
+  </style>
 </head>
 <body>
 <h1>웹캠 이미지 캡처 버퍼 테스트</h1>
@@ -27,360 +27,497 @@
 <button id="predictingStop">predicting Stop</button>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
 
 <script>
-    const startButton = document.getElementById('start');
-    const stopButton = document.getElementById('stop');
+  const startButton = document.getElementById('start');
+  const stopButton = document.getElementById('stop');
 
-    const predictingStartButton = document.getElementById('predictingStart');
-    const predictingStopButton = document.getElementById('predictingStop');
-
-
-    const video = document.querySelector('video');
-    const bufferCountEl = document.getElementById('bufferCount');
-    const imageBuffer = [];
-    const MAX_BUFFER_MS = 10 * 1000; // 10초
-    const CAPTURE_INTERVAL_MS = 500;
+  const predictingStartButton = document.getElementById('predictingStart');
+  const predictingStopButton = document.getElementById('predictingStop');
 
 
-    // 페이지에서 음성 인식 시작
-    //startSpeechRecognition();
+  const video = document.querySelector('video');
+  const bufferCountEl = document.getElementById('bufferCount');
+  const imageBuffer = [];
+  const MAX_BUFFER_MS = 10 * 1000; // 10초
+  const CAPTURE_INTERVAL_MS = 500;
 
-    let captureIntervalId = null; // 캡처 타이머 ID
 
-    startButton.onclick  = async () => {
-      start();
-    };
+  // 페이지에서 음성 인식 시작
+  //startSpeechRecognition();
 
-    stopButton.onclick  = async () => {
+  let captureIntervalId = null; // 캡처 타이머 ID
+
+  startButton.onclick = async () => {
+    start();
+  };
+
+  stopButton.onclick = async () => {
+    stop();
+  };
+
+  predictingStartButton.onclick = async () => {
+    startPredicting();
+  };
+
+
+  async function start() {
+    startWebcam();
+    startCapturing();
+    startSpeechRecognition();
+  }
+
+  async function stop() {
+    stopCapturing();
+    stopWebcam();
+    stopSpeechRecognition();
+  }
+
+  // 웹캠 열기
+  async function startWebcam() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+      video.srcObject = stream;
+
+    } catch (e) {
+      alert('웹캠 사용 권한이 필요합니다.');
+      console.error(e);
+    }
+  }
+
+  async function stopWebcam() {
+    const stream = video.srcObject;
+    if (stream) {
+      // 모든 트랙을 순회하며 정지
+      stream.getTracks().forEach(track => track.stop());
+      video.srcObject = null;
+    }
+  }
+
+  // 음성 인식 초기화 (Web Speech API)
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const recognition = new SpeechRecognition();
+
+  recognition.continuous = true;  // 계속 듣기 모드
+  recognition.interimResults = false;  // 중간 결과 안받음
+  recognition.lang = 'ko-KR';  // 한국어 설정 (필요에 따라 변경 가능)
+
+  // 감지된 텍스트를 저장할 변수
+  let lastTranscript = '';
+
+  // 음성 인식 결과 이벤트
+  recognition.onresult = (event) => {
+    const lastResultIndex = event.results.length - 1;
+    const transcript = event.results[lastResultIndex][0].transcript.trim();
+
+    console.log('음성 인식 결과:', transcript);
+    lastTranscript = transcript;
+
+    // 텍스트를 화면에 출력
+    const speechTextDiv = document.getElementById('speechText');
+    if (speechTextDiv) {
+      speechTextDiv.textContent = transcript;
+    }
+
+    // 여기에 반복 음성 감지 로직 호출 가능
+    checkForRepeatedSpeech(transcript);
+  };
+
+  recognition.onerror = (event) => {
+    console.error('SpeechRecognition error:', event.error);
+  };
+
+  // 음성 인식 시작
+  function startSpeechRecognition() {
+    recognition.start();
+  }
+
+  // 음성 인식 시작
+  function stopSpeechRecognition() {
+    recognition.stop();
+  }
+
+  const transcriptBuffer = [];
+  const MAX_BUFFER_SIZE = 1000;  // 버퍼 크기 조절 가능
+
+
+  let predictLoop = true;
+
+  async function startPredicting() {
+    startWebcam();
+
+    const fullModel = await tf.loadLayersModel('localstorage://my-model-full'); // 또는 tf.loadGraphModel
+    console.log("load model compeat")
+    predictLoop = true;
+    predictFullFrame(fullModel);
+
+
+    const faceModel = await tf.loadLayersModel('localstorage://my-model-face'); // 또는 tf.loadGraphModel
+    predictFaceFrame(faceModel);
+
+
+  }
+
+  async function stopPredicting() {
+    predictLoop = false;
+  }
+
+  async function predictFullFrame(model) {
+    if (!predictLoop) return;
+
+    tf.engine().startScope(); // 메모리 누수 방지
+
+    const tensor = tf.browser.fromPixels(video)
+      .resizeBilinear([224, 224]) // 모델 입력 크기 맞추기
+      .toFloat()
+      .div(255.0) // 정규화
+      .expandDims(); // [1, 224, 224, 3]
+
+    const prediction = model.predict(tensor);
+    const result = await prediction.data(); // 예: [0.1, 0.9]
+
+    console.log('Prediction:', result);
+
+    tf.engine().endScope(); // 메모리 정리
+
+    requestAnimationFrame(() => predictFullFrame(model)); // 다음 프레임 요청
+  }
+
+
+  async function predictFaceFrame(model) {
+    if (!predictLoop) return;
+
+    tf.engine().startScope();
+
+    // 1. 비디오 프레임을 이미지로 변환
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // 2. 얼굴 크롭 (MediaPipe 기반)
+    const faceTensor = await cropFaceRegion(canvas); // cropFaceRegion은 이전에 만든 함수 사용
+    if (!faceTensor) {
+      console.warn('얼굴 인식 실패');
+      tf.engine().endScope();
+      requestAnimationFrame(() => predictFaceFrame(model));
+      return;
+    }
+
+    const input = faceTensor.expandDims(); // [1, 96, 96, 3]
+    const prediction = model.predict(input);
+    const result = await prediction.data(); // 예: [0.8, 0.2] 등
+
+    console.log('Face Prediction:', result);
+
+    tf.engine().endScope();
+
+    requestAnimationFrame(() => predictFaceFrame(model));
+  }
+
+  function checkForRepeatedSpeech(currentText) {
+    // 현재 텍스트가 버퍼에 이미 있으면 반복으로 감지
+    if (transcriptBuffer.includes(currentText)) {
+      console.log("✅ 반복 음성 감지됨");
       stop();
-    };
-
-    predictingStartButton.onclick  = async () => {
-      startPredicting();
-    };
 
 
-    async function start() {
-      startWebcam();
-      startCapturing();
-      startSpeechRecognition() ;
-    }
+      const models = trainOnBufferedImages();
+      //startPredicting();
 
-    async function stop() {
-      stopCapturing();
-      stopWebcam();
-      stopSpeechRecognition();
-    }
+      //start();
 
-    // 웹캠 열기
-    async function startWebcam() {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            video.srcObject = stream;
+      //uploadTrainedModel(model, currentText, "https://your-server.com/upload-model");
+      // 반복 음성 감지 시 처리 코드
+      // 예: 상태 표시, API 호출 등
+    } else {
+      // 새 텍스트면 버퍼에 추가
+      transcriptBuffer.push(currentText);
 
-        } catch (e) {
-            alert('웹캠 사용 권한이 필요합니다.');
-            console.error(e);
-        }
-    }
-
-    async function stopWebcam() {
-      const stream = video.srcObject;
-      if (stream) {
-        // 모든 트랙을 순회하며 정지
-        stream.getTracks().forEach(track => track.stop());
-        video.srcObject = null;
+      // 버퍼 크기 초과 시 가장 오래된 텍스트 제거
+      if (transcriptBuffer.length > MAX_BUFFER_SIZE) {
+        transcriptBuffer.shift();
       }
     }
+  }
 
-    // 음성 인식 초기화 (Web Speech API)
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
 
-    recognition.continuous = true;  // 계속 듣기 모드
-    recognition.interimResults = false;  // 중간 결과 안받음
-    recognition.lang = 'ko-KR';  // 한국어 설정 (필요에 따라 변경 가능)
+  // 이미지 캡처 함수
+  function captureImage() {
+    if (video.readyState < 2) return;
 
-    // 감지된 텍스트를 저장할 변수
-    let lastTranscript = '';
+    const now = Date.now();
+    const canvas = document.createElement('canvas');
+    canvas.width = 224;
+    canvas.height = 224;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const base64 = canvas.toDataURL('image/jpeg');
 
-    // 음성 인식 결과 이벤트
-    recognition.onresult = (event) => {
-        const lastResultIndex = event.results.length - 1;
-        const transcript = event.results[lastResultIndex][0].transcript.trim();
+    imageBuffer.push({base64, timestamp: now});
 
-        console.log('음성 인식 결과:', transcript);
-        lastTranscript = transcript;
-
-        // 텍스트를 화면에 출력
-        const speechTextDiv = document.getElementById('speechText');
-        if (speechTextDiv) {
-            speechTextDiv.textContent = transcript;
-        }
-
-        // 여기에 반복 음성 감지 로직 호출 가능
-        checkForRepeatedSpeech(transcript);
-    };
-
-    recognition.onerror = (event) => {
-        console.error('SpeechRecognition error:', event.error);
-    };
-
-    // 음성 인식 시작
-    function startSpeechRecognition() {
-        recognition.start();
+    // 10초 넘은 이미지 제거
+    while (imageBuffer.length && now - imageBuffer[0].timestamp > MAX_BUFFER_MS) {
+      imageBuffer.shift();
     }
 
-    // 음성 인식 시작
-    function stopSpeechRecognition() {
-      recognition.stop();
+    bufferCountEl.textContent = imageBuffer.length;
+  }
+
+  // 캡처 시작 함수
+  function startCapturing(intervalMs = 1000) {
+    if (captureIntervalId) return; // 이미 실행 중이면 무시
+    captureIntervalId = setInterval(captureImage, intervalMs);
+  }
+
+  // ✅ 캡처 정지 함수
+  function stopCapturing() {
+    if (captureIntervalId) {
+      clearInterval(captureIntervalId);
+      captureIntervalId = null;
+    }
+  }
+
+  /**
+   * 학습된 TensorFlow.js 모델을 서버 API로 전송
+   * @param {tf.LayersModel} model - 학습된 TensorFlow.js 모델
+   * @param {string} label - 반복된 음성 또는 라벨 텍스트
+   * @param {string} apiUrl - 업로드할 서버 API URL
+   */
+  function uploadTrainedModel(model, label, apiUrl) {
+    if (!model || !label || !apiUrl) {
+      console.error("❌ 모델, 라벨, API URL이 모두 필요합니다.");
+      return;
     }
 
-    const transcriptBuffer = [];
-    const MAX_BUFFER_SIZE = 1000;  // 버퍼 크기 조절 가능
+    try {
+      model.save(tf.io.withSaveHandler(async (artifacts) => {
+        const formData = new FormData();
 
+        // 모델 구조 JSON
+        const modelJson = new Blob(
+          [artifacts.modelTopology instanceof ArrayBuffer
+            ? new Uint8Array(artifacts.modelTopology)
+            : JSON.stringify(artifacts.modelTopology)],
+          {type: 'application/json'}
+        );
+        formData.append('model.json', modelJson, 'model.json');
 
-    let predictLoop = true;
+        // 모델 가중치 binary
+        const weightsBlob = new Blob([artifacts.weightData], {
+          type: 'application/octet-stream'
+        });
+        formData.append('model.weights.bin', weightsBlob, 'model.weights.bin');
 
-    async function startPredicting() {
-      startWebcam();
+        // 라벨 정보 포함
+        formData.append('label', label);
 
-      const model = await tf.loadLayersModel('localstorage://my-model'); // 또는 tf.loadGraphModel
-      console.log("load model compeat")
-      predictLoop = true;
-      predictFrame(model);
-    }
+        // 서버로 전송
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          body: formData
+        });
 
-    async function stopPredicting() {
-      predictLoop = false;
-    }
-
-    async function predictFrame(model) {
-      if (!predictLoop) return;
-
-      tf.engine().startScope(); // 메모리 누수 방지
-
-      const tensor = tf.browser.fromPixels(video)
-        .resizeBilinear([224, 224]) // 모델 입력 크기 맞추기
-        .toFloat()
-        .div(255.0) // 정규화
-        .expandDims(); // [1, 224, 224, 3]
-
-      const prediction = model.predict(tensor);
-      const result = await prediction.data(); // 예: [0.1, 0.9]
-
-      console.log('Prediction:', result);
-
-      tf.engine().endScope(); // 메모리 정리
-
-      requestAnimationFrame(() => predictFrame(model)); // 다음 프레임 요청
-    }
-
-
-    function checkForRepeatedSpeech(currentText) {
-        // 현재 텍스트가 버퍼에 이미 있으면 반복으로 감지
-        if (transcriptBuffer.includes(currentText)) {
-            console.log("✅ 반복 음성 감지됨");
-            stop();
-
-
-            const model = trainOnBufferedImages();
-            startPredicting();
-
-            //start();
-
-            //uploadTrainedModel(model, currentText, "https://your-server.com/upload-model");
-            // 반복 음성 감지 시 처리 코드
-            // 예: 상태 표시, API 호출 등
+        if (response.ok) {
+          console.log("✅ 모델 업로드 성공");
         } else {
-            // 새 텍스트면 버퍼에 추가
-            transcriptBuffer.push(currentText);
-
-            // 버퍼 크기 초과 시 가장 오래된 텍스트 제거
-            if (transcriptBuffer.length > MAX_BUFFER_SIZE) {
-                transcriptBuffer.shift();
-            }
+          console.error("❌ 모델 업로드 실패", await response.text());
         }
+      }));
+    } catch (error) {
+      console.error("❌ 모델 업로드 중 오류 발생:", error);
     }
+  }
 
+  // 이미지 텐서 배열 생성 (shape: [batch, 224,224,3])
+  async function convertToTensor() {
 
-    // 이미지 캡처 함수
-    function captureImage() {
-      if (video.readyState < 2) return;
+    const full = [];
+    const face = [];
 
-      const now = Date.now();
+    for (const item of imageBuffer) {
+      // base64를 Image 객체로 변환
+      const img = new Image();
+      img.src = item.base64;
+      await new Promise((resolve) => {
+        img.onload = resolve;
+      });
+
+      // 캔버스에 그림 그리고 텐서로 변환
       const canvas = document.createElement('canvas');
       canvas.width = 224;
       canvas.height = 224;
       const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const base64 = canvas.toDataURL('image/jpeg');
+      ctx.drawImage(img, 0, 0, 224, 224);
 
-      imageBuffer.push({ base64, timestamp: now });
-
-      // 10초 넘은 이미지 제거
-      while (imageBuffer.length && now - imageBuffer[0].timestamp > MAX_BUFFER_MS) {
-        imageBuffer.shift();
+      const imgTensor = tf.browser.fromPixels(canvas).toFloat().div(255.0); // 정규화
+      // 얼굴만 자르기
+      const faceTensor = await cropFaceRegion(img); // ← img를 넘김
+      if (faceTensor) {
+        face.push(faceTensor);
       }
 
-      bufferCountEl.textContent = imageBuffer.length;
+      full.push(imgTensor);
+      face.push(faceTensor)
+    }
+    return {full: full, face: face};
+  }
+
+  async function cropFaceRegion(imageElement) {
+    return new Promise((resolve) => {
+      const faceMesh = new FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults((results) => {
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+          console.warn("얼굴을 찾을 수 없음");
+          resolve(null);
+          return;
+        }
+
+        const landmarks = results.multiFaceLandmarks[0];
+        const width = imageElement.width;
+        const height = imageElement.height;
+
+        const xs = landmarks.map(p => p.x * width);
+        const ys = landmarks.map(p => p.y * height);
+
+        const minX = Math.max(Math.min(...xs) - 20, 0);
+        const maxX = Math.min(Math.max(...xs) + 20, width);
+        const minY = Math.max(Math.min(...ys) - 20, 0);
+        const maxY = Math.min(Math.max(...ys) + 20, height);
+
+        const cropWidth = maxX - minX;
+        const cropHeight = maxY - minY;
+
+        // 얼굴 영역을 Canvas에 그리기
+        const faceCanvas = document.createElement('canvas');
+        faceCanvas.width = cropWidth;
+        faceCanvas.height = cropHeight;
+        const faceCtx = faceCanvas.getContext('2d');
+        faceCtx.drawImage(
+          imageElement,
+          minX, minY, cropWidth, cropHeight,
+          0, 0, cropWidth, cropHeight
+        );
+
+        const faceTensor = tf.browser.fromPixels(faceCanvas)
+          .resizeBilinear([96, 96])
+          .toFloat()
+          .div(255.0);
+
+        resolve(faceTensor);
+      });
+
+      faceMesh.send({ image: imageElement });
+    });
+  }
+
+  function faceLayerModel() {
+    const model = tf.sequential();
+    model.add(tf.layers.conv2d({inputShape: [96, 96, 3], filters: 16, kernelSize: 3, activation: 'relu'}));
+    model.add(tf.layers.maxPooling2d({poolSize: 2}));
+    model.add(tf.layers.flatten());
+    model.add(tf.layers.dense({units: 2, activation: 'softmax'})); // 클래스 수는 동일
+    return model;
+  }
+
+  function cnnLayerModel() {
+    const model =  tf.sequential();
+    model.add(tf.layers.conv2d({inputShape: [224, 224, 3], filters: 16, kernelSize: 3, activation: 'relu'}));
+    model.add(tf.layers.maxPooling2d({poolSize: 2}));
+    model.add(tf.layers.flatten());
+    model.add(tf.layers.dense({units: 2, activation: 'softmax'})); // 2개 클래스 예시
+    return model;
+  }
+
+  async function modelCompileAndSave(tensor,label) {
+    // 텐서 배치로 합치기
+    const batch = tf.stack(tensor);
+    // 라벨 텐서 생성 (단일 클래스라 0으로 채움)
+    const ys = tf.tensor1d(new Array(tensor.length).fill(0), 'int32');
+
+    var model =  cnnLayerModel();
+
+    if(label == 'face'){
+      model = faceLayerModel();
     }
 
-    // 캡처 시작 함수
-    function startCapturing(intervalMs = 1000) {
-      if (captureIntervalId) return; // 이미 실행 중이면 무시
-      captureIntervalId = setInterval(captureImage, intervalMs);
-    }
+    model.compile({
+      optimizer: 'adam',
+      loss: 'sparseCategoricalCrossentropy',
+      metrics: ['accuracy']
+    });
 
-    // ✅ 캡처 정지 함수
-    function stopCapturing() {
-      if (captureIntervalId) {
-        clearInterval(captureIntervalId);
-        captureIntervalId = null;
+    console.log("학습 시작...");
+    await model.fit(batch, ys.toFloat(), {
+      epochs: 5,
+      callbacks: {
+        onEpochEnd: (epoch, logs) => {
+          console.log(`Epoch ${epoch + 1}: loss=${logs.loss.toFixed(4)}, acc=${logs.acc.toFixed(4)}`);
+        }
       }
+    });
+
+    console.log("학습 완료!");
+
+    // 메모리 정리
+    batch.dispose();
+    ys.dispose();
+
+    model.save('localstorage://my-model-'+label);
+    return model;
+
+  }
+
+  async function trainOnBufferedImages() {
+
+    if (imageBuffer.length === 0) {
+      console.warn("버퍼에 이미지가 없습니다.");
+      return;
     }
 
-    /**
-     * 학습된 TensorFlow.js 모델을 서버 API로 전송
-     * @param {tf.LayersModel} model - 학습된 TensorFlow.js 모델
-     * @param {string} label - 반복된 음성 또는 라벨 텍스트
-     * @param {string} apiUrl - 업로드할 서버 API URL
-     */
-     function uploadTrainedModel(model, label, apiUrl) {
-        if (!model || !label || !apiUrl) {
-            console.error("❌ 모델, 라벨, API URL이 모두 필요합니다.");
-            return;
-        }
+    tensor = await convertToTensor()
 
-        try {
-             model.save(tf.io.withSaveHandler(async (artifacts) => {
-                const formData = new FormData();
+    fullModel = await modelCompileAndSave(tensor.full,'full');
+    faceModel = await modelCompileAndSave(tensor.face,'face');
 
-                // 모델 구조 JSON
-                const modelJson = new Blob(
-                    [artifacts.modelTopology instanceof ArrayBuffer
-                        ? new Uint8Array(artifacts.modelTopology)
-                        : JSON.stringify(artifacts.modelTopology)],
-                    { type: 'application/json' }
-                );
-                formData.append('model.json', modelJson, 'model.json');
 
-                // 모델 가중치 binary
-                const weightsBlob = new Blob([artifacts.weightData], {
-                    type: 'application/octet-stream'
-                });
-                formData.append('model.weights.bin', weightsBlob, 'model.weights.bin');
+    return {full:fullModel, face:faceModel};
 
-                // 라벨 정보 포함
-                formData.append('label', label);
+    // 이후 모델 저장 혹은 API 업로드 진행
+  }
 
-                // 서버로 전송
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    body: formData
-                });
 
-                if (response.ok) {
-                    console.log("✅ 모델 업로드 성공");
-                } else {
-                    console.error("❌ 모델 업로드 실패", await response.text());
-                }
-            }));
-        } catch (error) {
-            console.error("❌ 모델 업로드 중 오류 발생:", error);
-        }
-    }
+  /*
 
-    // 0.5초 간격 캡처
-    //setInterval(captureImage, CAPTURE_INTERVAL_MS);
-
-    async function trainOnBufferedImages() {
-
-        if (imageBuffer.length === 0) {
-            console.warn("버퍼에 이미지가 없습니다.");
-            return;
-        }
-
-        // 이미지 텐서 배열 생성 (shape: [batch, 224,224,3])
-        const xs = [];
-        for (const item of imageBuffer) {
-            // base64를 Image 객체로 변환
-            const img = new Image();
-            img.src = item.base64;
-            await new Promise((resolve) => { img.onload = resolve; });
-
-            // 캔버스에 그림 그리고 텐서로 변환
-            const canvas = document.createElement('canvas');
-            canvas.width = 224;
-            canvas.height = 224;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, 224, 224);
-
-            const imgTensor = tf.browser.fromPixels(canvas).toFloat().div(255.0); // 정규화
-            xs.push(imgTensor);
-        }
-
-        // 텐서 배치로 합치기
-        const xsBatch = tf.stack(xs);
-
-        // 라벨 텐서 생성 (단일 클래스라 0으로 채움)
-        const ys = tf.tensor1d(new Array(imageBuffer.length).fill(0), 'int32');
-
-        // 간단한 CNN 모델 생성
-        const model = tf.sequential();
-        model.add(tf.layers.conv2d({inputShape: [224,224,3], filters: 16, kernelSize: 3, activation: 'relu'}));
-        model.add(tf.layers.maxPooling2d({poolSize: 2}));
-        model.add(tf.layers.flatten());
-        model.add(tf.layers.dense({units: 2, activation: 'softmax'})); // 2개 클래스 예시
-
-        model.compile({
-            optimizer: 'adam',
-            loss: 'sparseCategoricalCrossentropy',
-            metrics: ['accuracy']
-        });
-
-        console.log("학습 시작...");
-        await model.fit(xsBatch, ys.toFloat(), {
-            epochs: 5,
-            callbacks: {
-                onEpochEnd: (epoch, logs) => {
-                    console.log(`Epoch ${epoch+1}: loss=${logs.loss.toFixed(4)}, acc=${logs.acc.toFixed(4)}`);
-                }
-            }
-        });
-
-        console.log("학습 완료!");
-
-        // 메모리 정리
-        xsBatch.dispose();
-        ys.dispose();
-        xs.forEach(t => t.dispose());
-
-      model.save('localstorage://my-model');
-
-      console.log(model);
-      return model;
-
-        // 이후 모델 저장 혹은 API 업로드 진행
-    }
-
-    /*
-
-    @app.post("/upload-model")
+  @app.post("/upload-model")
 async def upload_model(model_json: UploadFile, model_weights: UploadFile, label: str = Form(...)):
-    save_path = f"./models/{label.replace(' ', '_')}"
-    os.makedirs(save_path, exist_ok=True)
+  save_path = f"./models/{label.replace(' ', '_')}"
+  os.makedirs(save_path, exist_ok=True)
 
-    with open(f"{save_path}/model.json", "wb") as f:
-        shutil.copyfileobj(model_json.file, f)
+  with open(f"{save_path}/model.json", "wb") as f:
+      shutil.copyfileobj(model_json.file, f)
 
-    with open(f"{save_path}/model.weights.bin", "wb") as f:
-        shutil.copyfileobj(model_weights.file, f)
+  with open(f"{save_path}/model.weights.bin", "wb") as f:
+      shutil.copyfileobj(model_weights.file, f)
 
-    return {"status": "success", "label": label}
+  return {"status": "success", "label": label}
 
-     */
+   */
 
 </script>
 </body>

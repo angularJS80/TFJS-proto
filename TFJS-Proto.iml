@@ -4,5 +4,8 @@
     <exclude-output />
     <content url="file://$MODULE_DIR$" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="library" name="@mediapipe/face_mesh" level="application" />
+    <orderEntry type="library" name="@mediapipe/drawing_utils" level="application" />
+    <orderEntry type="library" name="@mediapipe/camera_utils" level="application" />
   </component>
 </module>
