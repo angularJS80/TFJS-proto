@@ -26,6 +26,9 @@
 
 <button id="predictingStop">predicting Stop</button>
 
+<div id="image-container"></div>
+
+
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
@@ -43,8 +46,7 @@
   const video = document.querySelector('video');
   const bufferCountEl = document.getElementById('bufferCount');
   const imageBuffer = [];
-  const MAX_BUFFER_MS = 10 * 1000; // 10초
-  const CAPTURE_INTERVAL_MS = 500;
+  const MAX_BUFFER_MS = 2 * 1000; // 10초
 
 
   // 페이지에서 음성 인식 시작
@@ -63,6 +65,12 @@
   predictingStartButton.onclick = async () => {
     startPredicting();
   };
+
+  predictingStopButton.onclick = async () => {
+    stopPredicting();
+  };
+
+
 
 
   async function start() {
@@ -145,19 +153,18 @@
   const MAX_BUFFER_SIZE = 1000;  // 버퍼 크기 조절 가능
 
 
-  let predictLoop = true;
+  let predictLoop = false;
 
   async function startPredicting() {
     startWebcam();
-
-    const fullModel = await tf.loadLayersModel('localstorage://my-model-full'); // 또는 tf.loadGraphModel
-    console.log("load model compeat")
     predictLoop = true;
+    const fullModel = await tf.loadLayersModel('indexeddb://my-model-full'); // 또는 tf.loadGraphModel
+    console.log("load model compeat")
     predictFullFrame(fullModel);
 
 
-    const faceModel = await tf.loadLayersModel('localstorage://my-model-face'); // 또는 tf.loadGraphModel
-    predictFaceFrame(faceModel);
+    //const faceModel = await tf.loadLayersModel('indexeddb://my-model-face'); // 또는 tf.loadGraphModel
+    //predictFaceFrame(faceModel);
 
 
   }
@@ -283,57 +290,6 @@
     }
   }
 
-  /**
-   * 학습된 TensorFlow.js 모델을 서버 API로 전송
-   * @param {tf.LayersModel} model - 학습된 TensorFlow.js 모델
-   * @param {string} label - 반복된 음성 또는 라벨 텍스트
-   * @param {string} apiUrl - 업로드할 서버 API URL
-   */
-  function uploadTrainedModel(model, label, apiUrl) {
-    if (!model || !label || !apiUrl) {
-      console.error("❌ 모델, 라벨, API URL이 모두 필요합니다.");
-      return;
-    }
-
-    try {
-      model.save(tf.io.withSaveHandler(async (artifacts) => {
-        const formData = new FormData();
-
-        // 모델 구조 JSON
-        const modelJson = new Blob(
-          [artifacts.modelTopology instanceof ArrayBuffer
-            ? new Uint8Array(artifacts.modelTopology)
-            : JSON.stringify(artifacts.modelTopology)],
-          {type: 'application/json'}
-        );
-        formData.append('model.json', modelJson, 'model.json');
-
-        // 모델 가중치 binary
-        const weightsBlob = new Blob([artifacts.weightData], {
-          type: 'application/octet-stream'
-        });
-        formData.append('model.weights.bin', weightsBlob, 'model.weights.bin');
-
-        // 라벨 정보 포함
-        formData.append('label', label);
-
-        // 서버로 전송
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          body: formData
-        });
-
-        if (response.ok) {
-          console.log("✅ 모델 업로드 성공");
-        } else {
-          console.error("❌ 모델 업로드 실패", await response.text());
-        }
-      }));
-    } catch (error) {
-      console.error("❌ 모델 업로드 중 오류 발생:", error);
-    }
-  }
-
   // 이미지 텐서 배열 생성 (shape: [batch, 224,224,3])
   async function convertToTensor() {
 
@@ -343,6 +299,7 @@
     for (const item of imageBuffer) {
       // base64를 Image 객체로 변환
       const img = new Image();
+      document.getElementById('image-container').appendChild(img);
       img.src = item.base64;
       await new Promise((resolve) => {
         img.onload = resolve;
@@ -435,6 +392,46 @@
     return model;
   }
 
+  function improvedFaceLayerModel() {
+    const model = tf.sequential();
+
+    model.add(tf.layers.conv2d({
+      inputShape: [96, 96, 3],
+      filters: 32,
+      kernelSize: 3,
+      activation: 'relu',
+      padding: 'same'
+    }));
+    model.add(tf.layers.maxPooling2d({poolSize: 2, strides: 2}));
+
+    model.add(tf.layers.conv2d({
+      filters: 64,
+      kernelSize: 3,
+      activation: 'relu',
+      padding: 'same'
+    }));
+    model.add(tf.layers.maxPooling2d({poolSize: 2, strides: 2}));
+
+    model.add(tf.layers.conv2d({
+      filters: 128,
+      kernelSize: 3,
+      activation: 'relu',
+      padding: 'same'
+    }));
+    model.add(tf.layers.maxPooling2d({poolSize: 2, strides: 2}));
+
+    model.add(tf.layers.flatten());
+
+    model.add(tf.layers.dense({units: 128, activation: 'relu'}));
+    model.add(tf.layers.dropout({rate: 0.5}));
+
+    // ✅ softmax 대신 sigmoid로 변경 → 확률값 1개 출력
+    model.add(tf.layers.dense({units: 1, activation: 'sigmoid'}));
+
+    return model;
+  }
+
+
   function cnnLayerModel() {
     const model =  tf.sequential();
     model.add(tf.layers.conv2d({inputShape: [224, 224, 3], filters: 16, kernelSize: 3, activation: 'relu'}));
@@ -444,26 +441,59 @@
     return model;
   }
 
-  async function modelCompileAndSave(tensor,label) {
-    // 텐서 배치로 합치기
+  function improvedCnnLayerModel() {
+    const model = tf.sequential();
+
+    model.add(tf.layers.conv2d({
+      inputShape: [224, 224, 3],
+      filters: 32,
+      kernelSize: 3,
+      activation: 'relu',
+      padding: 'same'
+    }));
+    model.add(tf.layers.maxPooling2d({poolSize: 2}));
+
+    model.add(tf.layers.conv2d({
+      filters: 64,
+      kernelSize: 3,
+      activation: 'relu',
+      padding: 'same'
+    }));
+    model.add(tf.layers.maxPooling2d({poolSize: 2}));
+
+    model.add(tf.layers.flatten());
+    model.add(tf.layers.dense({units: 128, activation: 'relu'}));
+    model.add(tf.layers.dropout({rate: 0.5}));
+    model.add(tf.layers.dense({units: 2, activation: 'softmax'}));
+
+    return model;
+  }
+
+  async function modelCompileAndSave(tensor, label) {
     const batch = tf.stack(tensor);
-    // 라벨 텐서 생성 (단일 클래스라 0으로 채움)
-    const ys = tf.tensor1d(new Array(tensor.length).fill(0), 'int32');
 
-    var model =  cnnLayerModel();
+    let model;
+    let ys;
+    let lossFn;
 
-    if(label == 'face'){
-      model = faceLayerModel();
+    if (label === 'face') {
+      model = improvedFaceLayerModel();
+      ys = tf.tensor1d(new Array(tensor.length).fill(1), 'float32');  // ✅ float32
+      lossFn = 'binaryCrossentropy';
+    } else {
+      model = improvedCnnLayerModel();
+      ys = tf.tensor1d(new Array(tensor.length).fill(0), 'float32');    // ✅ float32
+      lossFn = 'sparseCategoricalCrossentropy';
     }
 
     model.compile({
       optimizer: 'adam',
-      loss: 'sparseCategoricalCrossentropy',
+      loss: lossFn,
       metrics: ['accuracy']
     });
 
     console.log("학습 시작...");
-    await model.fit(batch, ys.toFloat(), {
+    await model.fit(batch, ys, {
       epochs: 5,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
@@ -471,16 +501,13 @@
         }
       }
     });
-
     console.log("학습 완료!");
 
-    // 메모리 정리
     batch.dispose();
     ys.dispose();
 
-    model.save('localstorage://my-model-'+label);
+    await model.save('indexeddb://my-model-' + label);
     return model;
-
   }
 
   async function trainOnBufferedImages() {
