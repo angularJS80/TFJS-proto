@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>MobileNet 간단 추론 테스트</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
+</head>
+<body>
+<img id="img" src="https://tensorflow.org/images/blogs/serving/cat.jpg" width="224" />
+<p id="result">예측 결과...</p>
+
+<script>
+  async function run() {
+    const img = document.getElementById('img');
+    const model = await mobilenet.load();
+    const predictions = await model.classify(img);
+    document.getElementById('result').innerText =
+      predictions.map(p => `${p.className}: ${(p.probability * 100).toFixed(2)}%`).join('\n');
+  }
+  run();
+</script>
+</body>
+</html>

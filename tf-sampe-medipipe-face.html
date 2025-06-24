@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>MediaPipe Hands + Face 기본 예제</title>
+  <style>
+    video, canvas {
+      position: absolute;
+      left: 0; top: 0;
+      width: 640px; height: 480px;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+</head>
+<body>
+<video id="input_video" autoplay playsinline></video>
+<canvas id="output_canvas"></canvas>
+<p id="status" style="position:absolute;top:490px;left:10px;font-size:20px;color:#333;"></p>
+
+<script>
+  const videoElement = document.getElementById('input_video');
+  const canvasElement = document.getElementById('output_canvas');
+  const canvasCtx = canvasElement.getContext('2d');
+  const status = document.getElementById('status');
+
+  canvasElement.width = 640;
+  canvasElement.height = 480;
+
+  // 손 모델 설정
+  const hands = new Hands({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.7
+  });
+
+  // 얼굴 모델 설정
+  const faceMesh = new FaceMesh({
+    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+  });
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.7
+  });
+
+  let latestFaceLandmarks = null;
+  let latestHandsLandmarks = [];
+
+  hands.onResults(onHandsResults);
+  faceMesh.onResults(onFaceResults);
+
+  // 웹캠 세팅
+  navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }).then((stream) => {
+    videoElement.srcObject = stream;
+  });
+
+  // 매 프레임 처리 함수
+  async function onFrame() {
+    await hands.send({image: videoElement});
+    await faceMesh.send({image: videoElement});
+    requestAnimationFrame(onFrame);
+  }
+
+  // 손 결과 처리
+  function onHandsResults(results) {
+    latestHandsLandmarks = results.multiHandLandmarks || [];
+    drawResults();
+  }
+
+  // 얼굴 결과 처리
+  function onFaceResults(results) {
+    latestFaceLandmarks = results.multiFaceLandmarks ? results.multiFaceLandmarks[0] : null;
+    drawResults();
+  }
+
+  // 손과 얼굴 랜드마크 그리기 및 간단 거리 체크
+  function drawResults() {
+    canvasCtx.save();
+    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+
+    if (latestFaceLandmarks) {
+      drawConnectors(canvasCtx, latestFaceLandmarks, FACEMESH_TESSELATION, { color: '#C0C0C070', lineWidth: 1 });
+    }
+    if (latestHandsLandmarks.length > 0) {
+      for (const landmarks of latestHandsLandmarks) {
+        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#00FF00', lineWidth: 4 });
+        drawLandmarks(canvasCtx, landmarks, { color: '#FF0000', lineWidth: 2 });
+      }
+    }
+
+    // 단순 거리 체크: 손목(landmarks[0])과 코(얼굴 landmark 1) 거리 계산
+    if (latestFaceLandmarks && latestHandsLandmarks.length > 0) {
+      const faceNose = latestFaceLandmarks[1]; // 코 점
+      let closeHandDetected = false;
+
+      for (const hand of latestHandsLandmarks) {
+        const handWrist = hand[0];
+        // 얼굴과 손목 2D 거리 (정규화 좌표, 0~1 사이)
+        const dx = faceNose.x - handWrist.x;
+        const dy = faceNose.y - handWrist.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (dist < 0.1) { // 임계값 조절 가능
+          closeHandDetected = true;
+          break;
+        }
+      }
+
+      status.textContent = closeHandDetected ? '손이 얼굴에 가까워요!' : '손과 얼굴 거리가 멉니다';
+    } else {
+      status.textContent = '손 또는 얼굴 인식 중...';
+    }
+
+    canvasCtx.restore();
+  }
+
+  // 실행 시작
+  videoElement.onloadeddata = () => {
+    onFrame();
+  };
+</script>
+</body>
+</html>

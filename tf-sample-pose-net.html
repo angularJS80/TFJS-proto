@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PoseNet 움직임 감지 샘플</title>
+  <style>
+    body { margin: 0; background: #222; display: flex; justify-content: center; align-items: center; height: 100vh; color: white; font-family: sans-serif; }
+    video, canvas { position: absolute; width: 640px; height: 480px; top: 50%; left: 50%; transform: translate(-50%, -50%); border-radius: 8px; box-shadow: 0 0 12px #000a; }
+    #message { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); font-size: 20px; font-weight: bold; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.8.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
+</head>
+<body>
+<div id="message">초기화 중...</div>
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas"></canvas>
+
+<script>
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const message = document.getElementById('message');
+
+  let net;
+  let prevRightWrist = null; // 이전 프레임 오른손목 좌표
+  const movementThreshold = 10; // 움직임 감지 최소 거리(픽셀)
+
+  async function setupCamera() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
+    video.srcObject = stream;
+    return new Promise(resolve => {
+      video.onloadedmetadata = () => resolve(video);
+    });
+  }
+
+  function drawKeypoints(keypoints, minConfidence, ctx) {
+    keypoints.forEach(kp => {
+      if (kp.score >= minConfidence) {
+        const { x, y } = kp.position;
+        ctx.beginPath();
+        ctx.arc(x, y, 6, 0, 2 * Math.PI);
+        ctx.fillStyle = 'aqua';
+        ctx.fill();
+      }
+    });
+  }
+
+  function drawSkeleton(keypoints, minConfidence, ctx) {
+    const adjacentKeyPoints = posenet.getAdjacentKeyPoints(keypoints, minConfidence);
+    adjacentKeyPoints.forEach(([kp1, kp2]) => {
+      ctx.beginPath();
+      ctx.moveTo(kp1.position.x, kp1.position.y);
+      ctx.lineTo(kp2.position.x, kp2.position.y);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'chartreuse';
+      ctx.stroke();
+    });
+  }
+
+  function distance(p1, p2) {
+    return Math.sqrt((p1.x - p2.x)**2 + (p1.y - p2.y)**2);
+  }
+
+  async function run() {
+    await setupCamera();
+    video.play();
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    net = await posenet.load({
+      architecture: 'MobileNetV1',
+      outputStride: 16,
+      inputResolution: { width: video.videoWidth, height: video.videoHeight },
+      multiplier: 0.75
+    });
+
+    message.textContent = '모델 로드 완료. 움직임 감지 시작';
+
+    async function detect() {
+      const pose = await net.estimateSinglePose(video, { flipHorizontal: true });
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      drawKeypoints(pose.keypoints, 0.5, ctx);
+      drawSkeleton(pose.keypoints, 0.5, ctx);
+
+      // 오른손목 키포인트 찾기
+      const rightWrist = pose.keypoints.find(kp => kp.part === 'rightWrist');
+      console.log(rightWrist);
+      if (rightWrist && rightWrist.score > 0.5) {
+        if (prevRightWrist) {
+          const dist = distance(rightWrist.position, prevRightWrist);
+
+          if (dist > movementThreshold) {
+            message.textContent = `오른손 움직임 감지! (거리: ${dist.toFixed(1)} px)`;
+
+          } else {
+            message.textContent = '오른손 정지 상태';
+          }
+        }
+        prevRightWrist = rightWrist.position;
+      } else {
+        message.textContent = '오른손목 인식 불가';
+        prevRightWrist = null;
+      }
+
+      requestAnimationFrame(detect);
+    }
+
+    detect();
+  }
+
+  run();
+</script>
+</body>
+</html>

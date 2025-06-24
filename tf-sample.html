@@ -46,7 +46,7 @@
   const video = document.querySelector('video');
   const bufferCountEl = document.getElementById('bufferCount');
   const imageBuffer = [];
-  const MAX_BUFFER_MS = 2 * 1000; // 10초
+  const MAX_BUFFER_MS = 10 * 1000; // 10초
 
 
   // 페이지에서 음성 인식 시작
@@ -162,7 +162,6 @@
     console.log("load model compeat")
     predictFullFrame(fullModel);
 
-
     //const faceModel = await tf.loadLayersModel('indexeddb://my-model-face'); // 또는 tf.loadGraphModel
     //predictFaceFrame(faceModel);
 
@@ -178,11 +177,13 @@
 
     tf.engine().startScope(); // 메모리 누수 방지
 
+
     const tensor = tf.browser.fromPixels(video)
       .resizeBilinear([224, 224]) // 모델 입력 크기 맞추기
       .toFloat()
-      .div(255.0) // 정규화
-      .expandDims(); // [1, 224, 224, 3]
+      .div(127.5)
+      .sub(1)
+      .expandDims();
 
     const prediction = model.predict(tensor);
     const result = await prediction.data(); // 예: [0.1, 0.9]
@@ -277,7 +278,7 @@
   }
 
   // 캡처 시작 함수
-  function startCapturing(intervalMs = 1000) {
+  function startCapturing(intervalMs = 500) {
     if (captureIntervalId) return; // 이미 실행 중이면 무시
     captureIntervalId = setInterval(captureImage, intervalMs);
   }
@@ -312,31 +313,36 @@
       const ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, 224, 224);
 
-      const imgTensor = tf.browser.fromPixels(canvas).toFloat().div(255.0); // 정규화
+      const imgTensor = tf.browser.fromPixels(canvas).toFloat()
+        .div(127.5)
+        .sub(1); // 정규화
       // 얼굴만 자르기
-      const faceTensor = await cropFaceRegion(img); // ← img를 넘김
+     /* const faceTensor = await cropFaceRegion(img); // ← img를 넘김
       if (faceTensor) {
         face.push(faceTensor);
       }
+      face.push(faceTensor)
+      */
 
       full.push(imgTensor);
-      face.push(faceTensor)
+
     }
     return {full: full, face: face};
   }
 
   async function cropFaceRegion(imageElement) {
-    return new Promise((resolve) => {
-      const faceMesh = new FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-      });
+    const faceMesh = new FaceMesh({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+    });
+    faceMesh.setOptions({
+      maxNumFaces: 1,
+      refineLandmarks: true,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
 
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5
-      });
+    return new Promise((resolve) => {
+
 
       faceMesh.onResults((results) => {
         if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
@@ -431,6 +437,38 @@
     return model;
   }
 
+  async function mobilenetTransferModel() {
+    const MODEL_URL = 'https://storage.googleapis.com/tfjs-models/tfjs/mobilenet_v1_1.0_224/model.json';
+
+    const mobilenet = tf.loadLayersModel(
+      MODEL_URL,
+      { fromTFHub: true }
+    );
+
+    return mobilenet.then(baseModel => {
+      const featureExtractor = tf.model({
+        inputs: baseModel.inputs,
+        outputs: baseModel.layers[baseModel.layers.length - 2].output
+      });
+
+      featureExtractor.trainable = true;
+
+      const fineTuneStart = featureExtractor.layers.length - 15; // 예: 마지막 15개 층부터 학습
+      for (let i = 0; i < featureExtractor.layers.length; i++) {
+        featureExtractor.layers[i].trainable = i >= fineTuneStart;
+      }
+      const model = tf.sequential();
+      model.add(tf.layers.inputLayer({ inputShape: [224, 224, 3] }));
+      model.add(featureExtractor);
+      model.add(tf.layers.flatten());
+      model.add(tf.layers.dense({ units: 64, activation: 'relu' }));
+      model.add(tf.layers.dropout({ rate: 0.2 }));
+      model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' })); // binary classification
+
+      return model;
+    });
+  }
+
 
   function cnnLayerModel() {
     const model =  tf.sequential();
@@ -477,13 +515,13 @@
     let lossFn;
 
     if (label === 'face') {
-      model = improvedFaceLayerModel();
+      model = improvedFaceLayerModel()
       ys = tf.tensor1d(new Array(tensor.length).fill(1), 'float32');  // ✅ float32
       lossFn = 'binaryCrossentropy';
     } else {
-      model = improvedCnnLayerModel();
+      model = await mobilenetTransferModel();
       ys = tf.tensor1d(new Array(tensor.length).fill(0), 'float32');    // ✅ float32
-      lossFn = 'sparseCategoricalCrossentropy';
+      lossFn = 'binaryCrossentropy';
     }
 
     model.compile({
@@ -494,7 +532,7 @@
 
     console.log("학습 시작...");
     await model.fit(batch, ys, {
-      epochs: 5,
+      epochs: 30,
       callbacks: {
         onEpochEnd: (epoch, logs) => {
           console.log(`Epoch ${epoch + 1}: loss=${logs.loss.toFixed(4)}, acc=${logs.acc.toFixed(4)}`);
@@ -520,10 +558,9 @@
     tensor = await convertToTensor()
 
     fullModel = await modelCompileAndSave(tensor.full,'full');
-    faceModel = await modelCompileAndSave(tensor.face,'face');
+    //faceModel = await modelCompileAndSave(tensor.face,'face');
 
-
-    return {full:fullModel, face:faceModel};
+    return {full:fullModel, face: {}};
 
     // 이후 모델 저장 혹은 API 업로드 진행
   }

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>MoveNet 오른손 움직임 추적</title>
+  <style>
+    video {
+      transform: scaleX(-1); /* 거울 모드 */
+      width: 640px;
+      height: 480px;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.8.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+</head>
+<body>
+<video id="video" autoplay playsinline muted></video>
+<script>
+  async function setupCamera() {
+    const video = document.getElementById('video');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480 },
+      audio: false
+    });
+    video.srcObject = stream;
+    return new Promise((resolve) => {
+      video.onloadedmetadata = () => resolve(video);
+    });
+  }
+
+  async function run() {
+    await tf.setBackend('webgl');
+    const video = await setupCamera();
+    video.play();
+
+    const detector = await poseDetection.createDetector(
+      poseDetection.SupportedModels.MoveNet,
+      { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+    );
+
+    async function detectPose() {
+      const poses = await detector.estimatePoses(video);
+      console.log(poses);
+      if (poses.length > 0) {
+        const keypoints = poses[0].keypoints;
+        const rightWrist = keypoints.find(kp => kp.name === 'right_wrist');
+        if (rightWrist && rightWrist.score > 0.5) {
+          console.log(`오른손 위치: x=${rightWrist.x.toFixed(1)}, y=${rightWrist.y.toFixed(1)}, score=${rightWrist.score.toFixed(2)}`);
+        }
+      }
+      requestAnimationFrame(detectPose);
+    }
+
+    detectPose();
+  }
+
+  run();
+</script>
+</body>
+</html>
